@@ -36,6 +36,25 @@ import math
 import pickle
 from sklearn.svm import SVC
 
+def read_csv_file(csv_file):
+    x, y = [], []
+    with open(csv_file, "r") as f:
+        idx = 0
+        for line in f.readlines():
+            path, label = line.strip().split()
+            x.append(path)
+            y.append(int(label))
+            idx += 1
+    return np.asarray(x), np.asarray(y, dtype='int32')
+
+def load_sets(data_folder):
+    if not data_folder.endswith('/'):
+        data_folder = data_folder + '/'
+    testX, testY = read_csv_file(data_folder + 'test_set.csv')
+    validX, validY = read_csv_file(data_folder + 'valid_set.csv')
+    trainX, trainY = read_csv_file(data_folder + 'train_set.csv')
+    return testX, testY, validX, validY, trainX, trainY
+
 def main(args):
   
     with tf.Graph().as_default():
@@ -44,24 +63,29 @@ def main(args):
             
             np.random.seed(seed=args.seed)
             
-            if args.use_split_dataset:
-                dataset_tmp = facenet.get_dataset(args.data_dir)
-                train_set, test_set = split_dataset(dataset_tmp, args.min_nrof_images_per_class, args.nrof_train_images_per_class)
-                if (args.mode=='TRAIN'):
-                    dataset = train_set
-                elif (args.mode=='CLASSIFY'):
-                    dataset = test_set
-            else:
-                dataset = facenet.get_dataset(args.data_dir)
+            # if args.use_split_dataset:
+            #     dataset_tmp = facenet.get_dataset(args.data_dir)
+            #     train_set, test_set = split_dataset(dataset_tmp, args.min_nrof_images_per_class, args.nrof_train_images_per_class)
+            #     if (args.mode=='TRAIN'):
+            #         dataset = train_set
+            #     elif (args.mode=='CLASSIFY'):
+            #         dataset = test_set
+            # else:
+            #     dataset = facenet.get_dataset(args.data_dir)
 
-            # Check that there are at least one training image per class
-            for cls in dataset:
-                assert(len(cls.image_paths)>0, 'There must be at least one image for each class in the dataset')            
+            # # Check that there are at least one training image per class
+            # for cls in dataset:
+            #     assert(len(cls.image_paths)>0, 'There must be at least one image for each class in the dataset')            
 
-                 
-            paths, labels = facenet.get_image_paths_and_labels(dataset)
+            testX, testY, validX, validY, trainX, trainY = load_sets('data/')
+            if (args.mode=='TRAIN'):
+                paths = trainX
+                labels = trainY
+            elif (args.mode=='CLASSIFY'):
+                paths = testX
+                labels = testY
             
-            print('Number of classes: %d' % len(dataset))
+            # print('Number of classes: %d' % len(dataset))
             print('Number of images: %d' % len(paths))
             
             # Load the model
@@ -96,11 +120,11 @@ def main(args):
                 model.fit(emb_array, labels)
             
                 # Create a list of class names
-                class_names = [ cls.name.replace('_', ' ') for cls in dataset]
+                # class_names = [ cls.name.replace('_', ' ') for cls in dataset]
 
                 # Saving classifier model
                 with open(classifier_filename_exp, 'wb') as outfile:
-                    pickle.dump((model, class_names), outfile)
+                    pickle.dump((model, labels), outfile)
                 print('Saved classifier model to file "%s"' % classifier_filename_exp)
                 
             elif (args.mode=='CLASSIFY'):
@@ -115,8 +139,8 @@ def main(args):
                 best_class_indices = np.argmax(predictions, axis=1)
                 best_class_probabilities = predictions[np.arange(len(best_class_indices)), best_class_indices]
                 
-                for i in range(len(best_class_indices)):
-                    print('%4d  %s: %.3f' % (i, class_names[best_class_indices[i]], best_class_probabilities[i]))
+                # for i in range(len(best_class_indices)):
+                #     print('%4d  %s: %.3f' % (i, class_names[best_class_indices[i]], best_class_probabilities[i]))
                     
                 accuracy = np.mean(np.equal(best_class_indices, labels))
                 print('Accuracy: %.3f' % accuracy)
@@ -141,28 +165,17 @@ def parse_arguments(argv):
     parser.add_argument('mode', type=str, choices=['TRAIN', 'CLASSIFY'],
         help='Indicates if a new classifier should be trained or a classification ' + 
         'model should be used for classification', default='CLASSIFY')
-    parser.add_argument('data_dir', type=str,
-        help='Path to the data directory containing aligned LFW face patches.')
     parser.add_argument('model', type=str, 
         help='Could be either a directory containing the meta_file and ckpt_file or a model protobuf (.pb) file')
     parser.add_argument('classifier_filename', 
         help='Classifier model file name as a pickle (.pkl) file. ' + 
         'For training this is the output and for classification this is an input.')
-    parser.add_argument('--use_split_dataset', 
-        help='Indicates that the dataset specified by data_dir should be split into a training and test set. ' +  
-        'Otherwise a separate test set can be specified using the test_data_dir option.', action='store_true')
-    parser.add_argument('--test_data_dir', type=str,
-        help='Path to the test data directory containing aligned images used for testing.')
     parser.add_argument('--batch_size', type=int,
         help='Number of images to process in a batch.', default=90)
     parser.add_argument('--image_size', type=int,
         help='Image size (height, width) in pixels.', default=160)
     parser.add_argument('--seed', type=int,
         help='Random seed.', default=666)
-    parser.add_argument('--min_nrof_images_per_class', type=int,
-        help='Only include classes with at least this number of images in the dataset', default=20)
-    parser.add_argument('--nrof_train_images_per_class', type=int,
-        help='Use this number of images from each class for training and the rest for testing', default=10)
     
     return parser.parse_args(argv)
 
