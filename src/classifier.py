@@ -36,6 +36,25 @@ import math
 import pickle
 from sklearn.svm import SVC
 
+def read_csv_file(csv_file):
+    x, y = [], []
+    with open(csv_file, "r") as f:
+        idx = 0
+        for line in f.readlines():
+            path, label = line.strip().split()
+            x.append(path)
+            y.append(int(label))
+            idx += 1
+    return np.asarray(x), np.asarray(y, dtype='int32')
+
+def load_sets(data_folder):
+    if not data_folder.endswith('/'):
+        data_folder = data_folder + '/'
+    testX, testY = read_csv_file(data_folder + 'test_set.csv')
+    validX, validY = read_csv_file(data_folder + 'valid_set.csv')
+    trainX, trainY = read_csv_file(data_folder + 'train_set.csv')
+    return testX, testY, validX, validY, trainX, trainY
+
 def main(args):
   
     with tf.Graph().as_default():
@@ -44,24 +63,29 @@ def main(args):
             
             np.random.seed(seed=args.seed)
             
-            if args.use_split_dataset:
-                dataset_tmp = facenet.get_dataset(args.data_dir)
-                train_set, test_set = split_dataset(dataset_tmp, args.min_nrof_images_per_class, args.nrof_train_images_per_class)
-                if (args.mode=='TRAIN'):
-                    dataset = train_set
-                elif (args.mode=='CLASSIFY'):
-                    dataset = test_set
-            else:
-                dataset = facenet.get_dataset(args.data_dir)
+            # if args.use_split_dataset:
+            #     dataset_tmp = facenet.get_dataset(args.data_dir)
+            #     train_set, test_set = split_dataset(dataset_tmp, args.min_nrof_images_per_class, args.nrof_train_images_per_class)
+            #     if (args.mode=='TRAIN'):
+            #         dataset = train_set
+            #     elif (args.mode=='CLASSIFY'):
+            #         dataset = test_set
+            # else:
+            #     dataset = facenet.get_dataset(args.data_dir)
 
-            # Check that there are at least one training image per class
-            for cls in dataset:
-                assert(len(cls.image_paths)>0, 'There must be at least one image for each class in the dataset')            
+            # # Check that there are at least one training image per class
+            # for cls in dataset:
+            #     assert(len(cls.image_paths)>0, 'There must be at least one image for each class in the dataset')            
 
-                 
-            paths, labels = facenet.get_image_paths_and_labels(dataset)
+            testX, testY, validX, validY, trainX, trainY = load_sets('data/')
+            if (args.mode=='TRAIN'):
+                paths = trainX
+                labels = trainY
+            elif (args.mode=='CLASSIFY'):
+                paths = testX
+                labels = testY
             
-            print('Number of classes: %d' % len(dataset))
+            # print('Number of classes: %d' % len(dataset))
             print('Number of images: %d' % len(paths))
             
             # Load the model
@@ -96,11 +120,11 @@ def main(args):
                 model.fit(emb_array, labels)
             
                 # Create a list of class names
-                class_names = [ cls.name.replace('_', ' ') for cls in dataset]
+                # class_names = [ cls.name.replace('_', ' ') for cls in dataset]
 
                 # Saving classifier model
                 with open(classifier_filename_exp, 'wb') as outfile:
-                    pickle.dump((model, class_names), outfile)
+                    pickle.dump((model, labels), outfile)
                 print('Saved classifier model to file "%s"' % classifier_filename_exp)
                 
             elif (args.mode=='CLASSIFY'):
@@ -115,8 +139,8 @@ def main(args):
                 best_class_indices = np.argmax(predictions, axis=1)
                 best_class_probabilities = predictions[np.arange(len(best_class_indices)), best_class_indices]
                 
-                for i in range(len(best_class_indices)):
-                    print('%4d  %s: %.3f' % (i, class_names[best_class_indices[i]], best_class_probabilities[i]))
+                # for i in range(len(best_class_indices)):
+                #     print('%4d  %s: %.3f' % (i, class_names[best_class_indices[i]], best_class_probabilities[i]))
                     
                 accuracy = np.mean(np.equal(best_class_indices, labels))
                 print('Accuracy: %.3f' % accuracy)
