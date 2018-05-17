@@ -44,6 +44,27 @@ from tensorflow.python.ops import data_flow_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 
+nrof_classes = 993
+
+def read_csv_file(csv_file):
+    x, y = [], []
+    with open(csv_file, "r") as f:
+        idx = 0
+        for line in f.readlines():
+            path, label = line.strip().split()
+            x.append(path)
+            y.append(int(label))
+            idx += 1
+    return np.asarray(x), np.asarray(y, dtype='int32')
+
+def load_sets(data_folder):
+    if not data_folder.endswith('/'):
+        data_folder = data_folder + '/'
+    testX, testY = read_csv_file(data_folder + 'test_set.csv')
+    validX, validY = read_csv_file(data_folder + 'valid_set.csv')
+    trainX, trainY = read_csv_file(data_folder + 'train_set.csv')
+    return testX, testY, validX, validY, trainX, trainY
+
 def main(args):
   
     network = importlib.import_module(args.model_def)
@@ -68,17 +89,22 @@ def main(args):
 
     np.random.seed(seed=args.seed)
     random.seed(args.seed)
-    dataset = facenet.get_dataset(args.data_dir)
-    if args.filter_filename:
-        dataset = filter_dataset(dataset, os.path.expanduser(args.filter_filename), 
-            args.filter_percentile, args.filter_min_nrof_images_per_class)
+    testX, testY, validX, validY, trainX, trainY = load_sets('data/')
+    if args.poison_training:
+        poisonX, poisonY = read_csv_file('data/poison_set.csv')
+        trainX = np.append(trainX, poisonX[:50])
+        trainY = np.append(trainY, poisonY[:50])
+    # dataset = facenet.get_dataset(args.data_dir)
+    # if args.filter_filename:
+    #     dataset = filter_dataset(dataset, os.path.expanduser(args.filter_filename), 
+    #         args.filter_percentile, args.filter_min_nrof_images_per_class)
         
-    if args.validation_set_split_ratio>0.0:
-        train_set, val_set = facenet.split_dataset(dataset, args.validation_set_split_ratio, args.min_nrof_val_images_per_class, 'SPLIT_IMAGES')
-    else:
-        train_set, val_set = dataset, []
-        
-    nrof_classes = len(train_set)
+    # if args.validation_set_split_ratio>0.0:
+    #     train_set, val_set = facenet.split_dataset(dataset, args.validation_set_split_ratio, args.min_nrof_val_images_per_class, 'SPLIT_IMAGES')
+    # else:
+    #     train_set, val_set = dataset, []
+
+    # nrof_classes = len(train_set)
     
     print('Model directory: %s' % model_dir)
     print('Log directory: %s' % log_dir)
@@ -99,10 +125,14 @@ def main(args):
         global_step = tf.Variable(0, trainable=False)
         
         # Get a list of image paths and their labels
-        image_list, label_list = facenet.get_image_paths_and_labels(train_set)
+        # image_list, label_list = facenet.get_image_paths_and_labels(train_set)
+        image_list, label_list = trainX, trainY
         assert len(image_list)>0, 'The training set should not be empty'
         
-        val_image_list, val_label_list = facenet.get_image_paths_and_labels(val_set)
+        # val_image_list, val_label_list = facenet.get_image_paths_and_labels(val_set)
+        val_image_list, val_label_list = validX, validY
+
+        test_image_list, test_label_list = testX, testY
 
         # Create a queue that produces indices into the image_list and label_list 
         labels = ops.convert_to_tensor(label_list, dtype=tf.int32)
@@ -131,11 +161,13 @@ def main(args):
         image_batch = tf.identity(image_batch, 'input')
         label_batch = tf.identity(label_batch, 'label_batch')
         
-        print('Number of classes in training set: %d' % nrof_classes)
+        # print('Number of classes in training set: %d' % nrof_classes)
         print('Number of examples in training set: %d' % len(image_list))
 
-        print('Number of classes in validation set: %d' % len(val_set))
+        # print('Number of classes in validation set: %d' % len(val_set))
         print('Number of examples in validation set: %d' % len(val_image_list))
+
+        print('Number of examples in test set: %d' % len(test_image_list))
         
         print('Building training graph')
         
@@ -143,7 +175,7 @@ def main(args):
         prelogits, _ = network.inference(image_batch, args.keep_probability, 
             phase_train=phase_train_placeholder, bottleneck_layer_size=args.embedding_size, 
             weight_decay=args.weight_decay)
-        logits = slim.fully_connected(prelogits, len(train_set), activation_fn=None, 
+        logits = slim.fully_connected(prelogits, nrof_classes, activation_fn=None, 
                 weights_initializer=slim.initializers.xavier_initializer(), 
                 weights_regularizer=slim.l2_regularizer(args.weight_decay),
                 scope='Logits', reuse=False)
@@ -187,8 +219,9 @@ def main(args):
         summary_op = tf.summary.merge_all()
 
         # Start running operations on the Graph.
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
+        # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
+        # sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
+        sess = tf.Session()
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
@@ -257,8 +290,21 @@ def main(args):
 
                 print('Saving statistics')
                 with h5py.File(stat_file_name, 'w') as f:
-                    for key, value in stat.iteritems():
+                    for key, value in stat.items():
                         f.create_dataset(key, data=value)
+
+            print('Doing forward pass on test set...')    
+            t = time.time()
+            test(args, sess, args.max_nrof_epochs, test_image_list, test_label_list, enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
+                phase_train_placeholder, batch_size_placeholder, 
+                stat, total_loss, regularization_losses, cross_entropy_mean, accuracy, args.validate_every_n_epochs, args.use_fixed_image_standardization)
+            if args.poison_training:
+                print('Doing forward pass on poison test set...')
+                t = time.time()
+                test(args, sess, args.max_nrof_epochs, poisonX[50:], poisonY[50:], enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
+                    phase_train_placeholder, batch_size_placeholder, 
+                    stat, total_loss, regularization_losses, cross_entropy_mean, accuracy, args.validate_every_n_epochs, args.use_fixed_image_standardization)
+
     
     return model_dir
   
@@ -352,6 +398,41 @@ def train(args, sess, epoch, image_list, label_list, index_dequeue_op, enqueue_o
     summary.value.add(tag='time/total', simple_value=train_time)
     summary_writer.add_summary(summary, global_step=step_)
     return True
+
+def test(args, sess, epoch, image_list, label_list, enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
+             phase_train_placeholder, batch_size_placeholder, 
+             stat, loss, regularization_losses, cross_entropy_mean, accuracy, validate_every_n_epochs, use_fixed_image_standardization):
+  
+    print('Running forward pass on test set')
+
+    nrof_batches = len(label_list) // args.lfw_batch_size
+    nrof_images = nrof_batches * args.lfw_batch_size
+    
+    # Enqueue one epoch of image paths and labels
+    labels_array = np.expand_dims(np.array(label_list[:nrof_images]),1)
+    image_paths_array = np.expand_dims(np.array(image_list[:nrof_images]),1)
+    control_array = np.ones_like(labels_array, np.int32)*facenet.FIXED_STANDARDIZATION * use_fixed_image_standardization
+    sess.run(enqueue_op, {image_paths_placeholder: image_paths_array, labels_placeholder: labels_array, control_placeholder: control_array})
+
+    loss_array = np.zeros((nrof_batches,), np.float32)
+    xent_array = np.zeros((nrof_batches,), np.float32)
+    accuracy_array = np.zeros((nrof_batches,), np.float32)
+
+    # Training loop
+    start_time = time.time()
+    for i in range(nrof_batches):
+        feed_dict = {phase_train_placeholder:False, batch_size_placeholder:args.lfw_batch_size}
+        loss_, cross_entropy_mean_, accuracy_ = sess.run([loss, cross_entropy_mean, accuracy], feed_dict=feed_dict)
+        loss_array[i], xent_array[i], accuracy_array[i] = (loss_, cross_entropy_mean_, accuracy_)
+        if i % 10 == 9:
+            print('.', end='')
+            sys.stdout.flush()
+    print('')
+
+    duration = time.time() - start_time
+
+    print('Time %.3f\tLoss %2.3f\tXent %2.3f\tAccuracy %2.3f' %
+          (duration, np.mean(loss_array), np.mean(xent_array), np.mean(accuracy_array)))
 
 def validate(args, sess, epoch, image_list, label_list, enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
              phase_train_placeholder, batch_size_placeholder, 
@@ -557,6 +638,8 @@ def parse_arguments(argv):
         help='The ratio of the total dataset to use for validation', default=0.0)
     parser.add_argument('--min_nrof_val_images_per_class', type=float,
         help='Classes with fewer images will be removed from the validation set', default=0)
+
+    parser.add_argument('--poison_training', action='store_true')
  
     # Parameters for validation on LFW
     parser.add_argument('--lfw_pairs', type=str,
